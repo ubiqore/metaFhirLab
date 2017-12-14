@@ -1,0 +1,22 @@
+jwt:
+  header: Authorization
+  secret: mySecret
+  expiration: 604800
+  route:
+    authentication:
+      path: auth
+      refresh: refresh
+    newuser:
+      path: auth/nu
+app:
+  init:
+    dir: /home/roky/data/kuma/
+    admin:
+      name: roky
+      pass: yeah
+    fakeUser:
+      name: eric
+      pass: rico
+  datasource:
+        dir: main
+        prefix : roky

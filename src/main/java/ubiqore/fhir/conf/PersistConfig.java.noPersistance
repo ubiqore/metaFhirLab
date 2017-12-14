@@ -1,0 +1,19 @@
+package ubiqore.fhir.conf;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import ubiqore.fhir.persist.AppPersistanceManager;
+
+/**
+ * Created by roky on 28/03/17.
+ */
+
+@Configuration
+public class PersistConfig {
+
+
+    @Bean
+    public AppPersistanceManager apm (){
+        return new AppPersistanceManager();
+    }
+}

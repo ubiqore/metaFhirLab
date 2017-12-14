@@ -1,0 +1,264 @@
+package ubiqore.fhir.persist;
+
+
+import com.beust.jcommander.internal.Lists;
+import com.blazegraph.gremlin.embedded.BlazeGraphEmbedded;
+import com.blazegraph.gremlin.embedded.BlazeGraphFactory;
+import com.blazegraph.gremlin.embedded.BlazeGraphReadOnly;
+import com.blazegraph.gremlin.structure.BlazeVertex;
+import org.apache.tinkerpop.gremlin.process.traversal.dsl.graph.GraphTraversal;
+import org.apache.tinkerpop.gremlin.process.traversal.dsl.graph.GraphTraversalSource;
+import org.apache.tinkerpop.gremlin.structure.Edge;
+import org.apache.tinkerpop.gremlin.structure.T;
+import org.apache.tinkerpop.gremlin.structure.Vertex;
+import org.apache.tinkerpop.gremlin.structure.VertexProperty;
+import org.apache.tinkerpop.gremlin.structure.io.IoCore;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.security.crypto.bcrypt.BCrypt;
+import ubiqore.fhir.model.security.AuthorityName;
+import ubiqore.fhir.model.security.User;
+
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+/**
+ * Created by roky on 28/03/17.
+ */
+
+@ConfigurationProperties(prefix="app.datasource")
+public class AppPersistanceManager {
+
+    @Value("${app.init.dir}")
+    String appPath;
+
+
+    private String tokenHeader;
+    public String getDir() {
+        return dir;
+    }
+
+    public void setDir(String dir) {
+        this.dir = dir;
+    }
+
+
+
+    private String dir;
+
+    public String getPrefix() {
+        return prefix;
+    }
+
+    public void setPrefix(String prefix) {
+        this.prefix = prefix;
+    }
+
+    private String prefix;
+
+    public AppPersistanceManager(){
+        System.out.println("inside apm constructor");
+
+    }
+    private BlazeGraphEmbedded g;
+    private String myDir;
+
+    @PostConstruct
+    public void init(){
+        myDir=this.appPath
+                +java.nio.file.FileSystems.getDefault().getSeparator()
+                +this.dir
+                +java.nio.file.FileSystems.getDefault().getSeparator();
+
+        String journalFile = myDir
+                +this.prefix
+                + ".jnl";
+        try {
+            // open if exists OR create
+            g = BlazeGraphFactory.open(journalFile);
+            //g= BigdataGraphFactory.open(journalFile,true);
+            Vertex v=null;
+            try { v=g.traversal().V().hasLabel("users").next();
+                    g.commit();
+            }catch (Exception e2){}
+
+            if (v==null){
+                // the graph is new.
+                g.addVertex("users").property("semanticType","UsersScheme");
+                g.addVertex("projects").property("semanticType","ProjectScheme");
+                g.tx().commit();
+
+                User u1= new User();
+                u1.setUsername("bob");
+                u1.setPassword("alig1410");
+                u1.setEmail("erico.ere@zeze.fr");
+                u1.setEnabled(true);
+
+                List<String> l= Lists.newArrayList();
+                l.add(AuthorityName.ROLE_USER);
+                l.add(AuthorityName.ROLE_ADMIN);
+                u1.setAuthorities(l);
+
+                this.createUser(u1);
+            }
+
+            try {
+                //System.err.print("dump="+g.dumpStore());
+            } catch (Exception e) {
+                e.printStackTrace();System.err.print("pbqsdqsdqdqsdq");
+            }
+           // g = BigdataGraphFactory.create(journalFile);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    @PreDestroy
+    public void destroy(){
+        System.err.print("output");
+        this.outPutGraph();
+        System.err.print("output finished");
+        g.close();
+    }
+
+    // 0 : OK
+    // 1 : name exists already
+    // 2 : password wrong format
+    // 3 : other issue : name  or password is null etc...
+    // 4 : username too long (> 10 caracters)
+    // 5 : create dir wrong
+    public int createUser(User u){
+        /* Pre-chech username/password format
+        * */
+        if ( null==u.getUsername() || u.getUsername().trim().equalsIgnoreCase("") )
+            return 3;
+        if ( null==u.getUsername() || u.getUsername().trim().length()> 12)
+            return 4;
+
+        if ( null==u.getPassword() || u.getPassword().trim().equalsIgnoreCase("") )
+            return 3;
+
+        if (u.getPassword().trim().length()<4)return 2;
+
+        /*  end of precheck
+         * */
+
+
+        BlazeGraphReadOnly roc = g.readOnlyConnection();
+        /*
+        Vertex s=roc.traversal().V().hasLabel("users").next();
+
+        if (s!=null){
+            System.out.println("type Semantic for users ==>"+(String)s.value("semanticType"));
+
+        }*/
+
+        try {
+           //System.out.println( g.dumpStore());
+           // System.out.println(g.traversal().V().has("semanticType","user").hasLabel(u.getUsername().trim()).next().toString());
+            long sameusers=roc.traversal().V().has("semanticType","user").hasLabel(u.getUsername().trim()).toStream().count();
+
+            System.out.println("user with same name "+sameusers);
+            roc.close();
+
+            if (sameusers>0)return 1;
+
+        }catch (Exception e){e.printStackTrace();}
+        finally {
+            try {
+                roc.close();
+            }     catch (Exception eee){}
+        }
+
+
+
+
+        try {
+            Files.createDirectories(Paths.get(myDir,"users",u.getUsername()));
+        } catch (IOException e) {
+            return 5;
+        }
+
+        try {
+
+            String hashed = BCrypt.hashpw(u.getPassword().trim(), BCrypt.gensalt());
+            Vertex userScheme=g.traversal().V().hasLabel("users").next();
+            BlazeVertex vu=g.addVertex(T.label,  u.getUsername().trim());
+            for (String auth:u.getAuthorities())
+                vu.property(VertexProperty.Cardinality.list,"auth", auth);
+            vu.property("semanticType","user");
+            vu.property("username", u.getUsername().trim());
+            vu.property("email",u.getEmail().trim());
+            vu.property("password",hashed);
+            final Edge edge = g.addEdge((BlazeVertex)userScheme, vu,"link");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            g.tx().commit();
+            return 5;
+
+        } finally {
+            g.tx().commit();
+        }
+        return 0;
+    }
+
+    public User getUserByUsername(String userName){
+
+        final BlazeGraphReadOnly readOnly = g.readOnlyConnection();
+
+        GraphTraversalSource gts=readOnly.traversal();
+
+        GraphTraversal<Vertex, Vertex> ok = gts.V();
+        GraphTraversal<Vertex, Vertex> ok2 = ok.has("semanticType", "user");
+        Vertex userV=null;
+        try {
+            userV = ok2.hasLabel(userName).next();
+        }finally {}
+
+        if (userV==null){
+            readOnly.close();
+            return null;
+        }
+
+        User u=new User();
+        u.setUsername((String)userV.property("username").value());
+        u.setPassword((String)userV.property("password").value());
+        u.setEmail((String)userV.property("email").value());
+        Iterator<VertexProperty<Object>> auths = userV.properties("auth");
+        u.setEnabled(true);
+        u.setEmail("eric.sadou@gmail.com");
+        u.setFirstname("lolo");u.setLastname("lili");
+        List<String> l= new ArrayList();
+        while (auths.hasNext()){
+            l.add((String)auths.next().value());
+        }
+        u.setAuthorities(l);
+
+        readOnly.close();
+        System.err.println(u.getPassword());
+        return u;
+    }
+
+    public void outPutGraph(){
+
+        try {
+            BlazeGraphReadOnly bro=g.readOnlyConnection();
+            bro.io(IoCore.graphson()).writeGraph(myDir+"out.json");
+            bro.close();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+
+}
